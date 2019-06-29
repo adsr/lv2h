@@ -199,6 +199,7 @@ lv2_evbuf_write(LV2_Evbuf_Iterator* iter,
 {
 	LV2_Atom_Sequence* aseq;
 	LV2_Atom_Event*    aev;
+	(void)subframes;
 	switch (iter->evbuf->type) {
 	case LV2_EVBUF_ATOM:
 		aseq = (LV2_Atom_Sequence*)&iter->evbuf->buf.atom;
