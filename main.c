@@ -8,6 +8,7 @@ int main(int argc, char **argv) {
     lv2h_t *host;
     lv2h_plug_t *plug;
     lv2h_inst_t *inst;
+    uint8_t msg[3];
 
     (void)argc;
     (void)argv;
@@ -21,6 +22,12 @@ int main(int argc, char **argv) {
 
     lv2h_inst_connect_to_audio(inst, "out_l", 0);
     lv2h_inst_connect_to_audio(inst, "out_r", 1);
+
+    msg[0] = 0x90;
+    msg[1] = 0x60;
+    msg[2] = 0x7f;
+
+    lv2h_inst_send_midi(mono, "midi_in", msg, 3);
 
     pthread_create(&audio_thread, NULL, lv2h_run_audio, host);
 

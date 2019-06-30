@@ -15,8 +15,6 @@ static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_co
     int frame_count;
     int frames_left;
 
-uint8_t msg[3];
-
     (void)frame_count_min;
 
     host = (lv2h_t*)outstream->userdata;
@@ -32,13 +30,6 @@ uint8_t msg[3];
         if (frame_count < 1) {
             break;
         }
-
-
-msg[0] = 0x90;
-msg[1] = 0x60;
-msg[2] = 0x7f;
-
-lv2h_inst_send_midi(mono, "midi_in", msg, 3);
 
         lv2h_run_plugin_insts(host, frame_count);
 

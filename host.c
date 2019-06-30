@@ -481,7 +481,7 @@ static int lv2h_port_init(lv2h_port_t *port, uint32_t port_index, lv2h_inst_t *i
     } else if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_atom_AtomPort)) {
         if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_InputPort)) {
             port->atom_input = lv2_evbuf_new(1024, LV2_EVBUF_ATOM, 0, lv2h_map_uri(host, LV2_ATOM__Sequence));
-            lilv_instance_connect_port(lilv_inst, port_index, port->atom_input);
+            lilv_instance_connect_port(lilv_inst, port_index, lv2_evbuf_get_buffer(port->atom_input));
         } else {
             port->atom_output = (LV2_Atom_Sequence*)calloc(1, sizeof(LV2_Atom_Sequence) + 1024);
             lilv_instance_connect_port(lilv_inst, port_index, port->atom_output);
