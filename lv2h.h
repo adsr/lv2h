@@ -33,8 +33,6 @@
     return;                                                                 \
 } while (0)
 
-#define try(__rv, __call) do { if (((__rv) = (__call)) != 0) return (__rv); } while(0)
-
 typedef struct _lv2h_t lv2h_t;
 typedef struct _lv2h_plug_t lv2h_plug_t;
 typedef struct _lv2h_inst_t lv2h_inst_t;
@@ -42,6 +40,8 @@ typedef struct _lv2h_port_t lv2h_port_t;
 typedef struct _lv2h_node_t lv2h_node_t;
 typedef struct _lv2h_event_t lv2h_event_t;
 typedef int (*lv2h_node_callback_fn)(lv2h_node_t *node, void *udata, int count);
+
+// TODO remove unused struct fields
 
 struct _lv2h_t {
     lv2h_plug_t *plugin_map;
@@ -133,7 +133,6 @@ struct _lv2h_event_t {
     long timestamp_ns;
     lv2h_event_t *next;
 };
-
 
 LV2H_API int lv2h_new(uint32_t sample_rate, size_t block_size, long tick_ms, lv2h_t **out_lv2h);
 LV2H_API int lv2h_free(lv2h_t *host);

@@ -31,6 +31,7 @@ static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_co
             break;
         }
 
+        // TODO mutex for data shared by threads
         lv2h_run_plugin_insts(host, frame_count);
 
         for (frame = 0; frame < frame_count; frame += 1) {

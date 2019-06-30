@@ -68,6 +68,8 @@ int lv2h_new(uint32_t sample_rate, size_t block_size, long tick_ms, lv2h_t **out
 }
 
 int lv2h_free(lv2h_t *host) {
+    // TODO ensure clean shutdown with valgrind
+
     lv2h_plug_t *plug, *plug_tmp;
 
     HASH_ITER(hh, host->plugin_map, plug, plug_tmp) {
@@ -120,9 +122,6 @@ int lv2h_run(lv2h_t *host) {
     }
     return LV2H_OK;
 }
-
-
-
 
 int lv2h_plug_new(lv2h_t *host, char *uri_str, lv2h_plug_t **out_plug) {
     lv2h_plug_t *plug;
@@ -207,14 +206,6 @@ int lv2h_inst_free(lv2h_inst_t *inst) {
     return LV2H_OK;
 }
 
-    // send note
-    //uint8_t msg[3] = {0x90, 0x40, 0x7f};
-    //LV2_Evbuf_Iterator end = lv2_evbuf_begin(evbuf);
-    //lv2_evbuf_write(&end, 0, 0, lv2h_map_uri(host, LV2_MIDI__MidiEvent), 3, msg);
-
-    // play
-    //run_audio();
-
 int lv2h_inst_connect(lv2h_inst_t *writer_inst, char *writer_port_name, lv2h_inst_t *reader_inst, char *reader_port_name) {
     return lv2h_inst_xnnect(writer_inst, writer_port_name, reader_inst, reader_port_name, 0);
 }
@@ -245,10 +236,12 @@ int lv2h_inst_send_midi(lv2h_inst_t *inst, char *port_name, uint8_t *bytes, int 
 }
 
 int lv2h_inst_set_param(lv2h_inst_t *inst, char *port_name, float val) {
+    // TODO
     return 0;
 }
 
 int lv2h_inst_play(lv2h_inst_t *inst, char *port_name, uint8_t *notes, int notes_len, int vel, long len_ms) {
+    // TODO
     return 0;
 }
 
@@ -507,7 +500,7 @@ static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter,
     size_t w;
     int f;
 
-    // TODO check depth
+    // TODO check depth to protect againt cycles in graph
 
     host = inst->plug->host;
 
