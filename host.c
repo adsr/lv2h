@@ -507,12 +507,14 @@ static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter,
     for (p = 0; p < inst->plug->port_count; ++p) {
         reader_port = inst->port_array + p;
         LL_FOREACH(reader_port->writer_port_list, writer_port) {
+            // TODO optimize looping over all ports like this
             if (writer_port->inst->current_iter != iter) {
                 lv2h_run_plugin_inst(writer_port->inst, frame_count, iter, depth + 1);
             }
         }
         w = 0;
         LL_FOREACH(reader_port->writer_port_list, writer_port) {
+            // TODO optimize case when there is 1 writer
             if (w == 0) {
                 memcpy(reader_port->reader_block_mixed, writer_port->writer_block, sizeof(float) * inst->plug->host->block_size);
             } else {
@@ -525,6 +527,14 @@ static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter,
     }
     if (inst->current_iter != iter && inst != host->audio_inst) {
         lilv_instance_run(inst->lilv_inst, frame_count);
+
+        for (p = 0; p < inst->plug->port_count; ++p) {
+            reader_port = inst->port_array + p;
+            if (reader_port->atom_input) {
+                lv2_evbuf_reset(reader_port->atom_input, 1);
+            }
+        }
+
         inst->current_iter = iter;
     }
     return LV2H_OK;
