@@ -226,7 +226,7 @@ int lv2h_inst_send_midi(lv2h_inst_t *inst, char *port_name, uint8_t *bytes, int 
     pthread_mutex_lock(&host->mutex);
     end = lv2_evbuf_end(port->atom_input); // TODO _begin?
     lv2_evbuf_write(&end, 0, 0, lv2h_map_uri(inst->plug->host, LV2_MIDI__MidiEvent), bytes_len, bytes);
-    printf("lv2h_inst_send_midi %02x %02x %02x\n", bytes[0], bytes[1], bytes[2]);
+    printf("lv2h_inst_send_midi %02x %02x %02x size=%u\n", bytes[0], bytes[1], bytes[2], lv2_evbuf_get_size(port->atom_input));
     pthread_mutex_unlock(&host->mutex);
     return LV2H_OK;
 }
@@ -281,6 +281,9 @@ int lv2h_inst_load_preset(lv2h_inst_t *inst, char *preset_str) {
     host = inst->plug->host;
     preset = lilv_new_uri(host->lilv_world, preset_str);
     state = lilv_state_new_from_world(host->lilv_world, &host->urid_map, preset);
+    if (!state) {
+        LV2H_RETURN_ERR(host, "lv2h_inst_load_preset: preset not found for %s\n", preset_str);
+    }
     lilv_state_restore(state, inst->lilv_inst, lv2h_inst_set_port_value, inst, 0, NULL);
     return LV2H_OK;
 }
@@ -433,6 +436,7 @@ static const char *lv2h_unmap_uri(LV2_URID_Map_Handle handle, LV2_URID urid) {
 static void lv2h_inst_set_port_value(const char *port_name, void *user_data, const void *value, uint32_t size, uint32_t type) {
     lv2h_inst_t *inst;
     uint32_t port_index;
+    float val;
 
     (void)size;
 
@@ -445,7 +449,10 @@ static void lv2h_inst_set_port_value(const char *port_name, void *user_data, con
     port_index = lv2h_inst_port_index(inst, port_name);
     if (port_index >= inst->plug->port_count) return;
 
-    inst->port_array[port_index].control_val = *((float*)value);
+    val = *((float*)value);
+    printf("%s = %f\n", port_name, val);
+
+    inst->port_array[port_index].control_val = val;
 }
 
 static uint32_t lv2h_inst_port_index(lv2h_inst_t *inst, const char *port_name) {
@@ -544,13 +551,17 @@ static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter,
         }
     }
     if (inst->current_iter != iter && inst != host->audio_inst) {
+
         lilv_instance_run(inst->lilv_inst, frame_count);
 
         pthread_mutex_lock(&host->mutex);
         for (p = 0; p < inst->plug->port_count; ++p) {
             reader_port = inst->port_array + p;
             if (reader_port->atom_input) {
-                lv2_evbuf_reset(reader_port->atom_input, 1);
+                if (lv2_evbuf_get_size(reader_port->atom_input) > 0) {
+                    printf("atom_input size was %u\n", lv2_evbuf_get_size(reader_port->atom_input));
+                    lv2_evbuf_reset(reader_port->atom_input, 1);
+                }
             }
         }
         pthread_mutex_unlock(&host->mutex);

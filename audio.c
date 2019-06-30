@@ -1,6 +1,7 @@
 #include "lv2h.h"
 
 static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_count_min, int frame_count_max);
+static void lv2h_underflow_callback(struct SoundIoOutStream *outstream);
 
 void *lv2h_run_audio(void *arg) {
     lv2h_t *host;
@@ -35,6 +36,8 @@ void *lv2h_run_audio(void *arg) {
     outstream->format = SoundIoFormatFloat32NE;
     outstream->write_callback = lv2h_audio_callback;
     outstream->userdata = host;
+    outstream->sample_rate = host->sample_rate;
+    outstream->software_latency = 32.0 / 1000.0;
 
     if ((err = soundio_outstream_open(outstream))) {
         LV2H_RETURN_ERR_ARG(host, NULL, "audio: soundio_outstream_open: %s\n", soundio_strerror(err));
@@ -73,6 +76,8 @@ static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_co
     layout = &outstream->layout;
     frames_left = frame_count_max;
 
+    // printf("frames_left=%d\n", frames_left);
+
     while (frames_left > 0) {
         frame_count = frames_left < host->block_size ? frames_left : host->block_size;
 
@@ -99,4 +104,9 @@ static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_co
 
         frames_left -= frame_count;
     }
+}
+
+static void lv2h_underflow_callback(struct SoundIoOutStream *outstream) {
+    static int count = 0;
+    fprintf(stderr, "underflow %d\n", count++);
 }

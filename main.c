@@ -11,28 +11,34 @@ static lv2h_inst_t *inst[4];
 int main(int argc, char **argv) {
     lv2h_t *host;
     lv2h_node_t *node;
+    int rv;
 
     (void)argc;
     (void)argv;
 
-    lv2h_new(44100, 128, 5, &host);
+    lv2h_new(44100, 128, 1, &host);
 
-    lv2h_plug_new(host, "http://calf.sourceforge.net/plugins/Monosynth", &plug[0]);
+    lv2h_plug_new(host, "http://drobilla.net/plugins/mda/JX10", &plug[0]);
     lv2h_inst_new(plug[0], &inst[0]);
-    lv2h_inst_load_preset(inst[0], "http://calf.sourceforge.net/factory_presets#monosynth_SquareWorm");
 
     lv2h_plug_new(host, "http://calf.sourceforge.net/plugins/VintageDelay", &plug[1]);
     lv2h_inst_new(plug[1], &inst[1]);
 
-    lv2h_inst_connect(inst[0], "out_l", inst[1], "in_l");
-    lv2h_inst_connect(inst[0], "out_r", inst[1], "in_l");
+    rv = lv2h_inst_load_preset(inst[0], "http://drobilla.net/plugins/mda/presets#JX10-303-saw-bass");
+    printf("lv2h_inst_load_preset rv=%d\n", rv);
+
+    // lv2h_inst_connect(inst[0], "out_l", inst[1], "in_l");
+    // lv2h_inst_connect(inst[0], "out_r", inst[1], "in_l");
+
+    lv2h_inst_connect(inst[0], "left_out", inst[1], "in_l");
+    lv2h_inst_connect(inst[0], "right_out", inst[1], "in_l");
 
     lv2h_inst_connect_to_audio(inst[1], "out_l", 0);
     lv2h_inst_connect_to_audio(inst[1], "out_r", 1);
 
     lv2h_node_new(host, lv2h_node_callback, NULL, &node);
-    lv2h_node_set_interval(node, 100);
-    node->count_limit = 10;
+    lv2h_node_set_interval(node, 50);
+    // lv2h_node_set_count_limit(node, 5);
 
     // pthread_create(&play_thread, NULL, lv2h_run_play, host);
     pthread_create(&audio_thread, NULL, lv2h_run_audio, host);
@@ -50,8 +56,11 @@ int main(int argc, char **argv) {
 
 static int lv2h_node_callback(lv2h_node_t *node, void *udata, int count) {
     printf("count=%d\n", count);
+    uint8_t note;
+    note = (count + 0x30) % 0x7f;
     // lv2h_inst_play(inst[0], "midi_in", 0, 0x30 + count, 0x30 + count + 3,  0x30 + count + 3 + 4, -1, 0x70, 500);
-    lv2h_inst_play(inst[0], "midi_in", 0, 0x30 + count, -1, -1, -1, 0x70, 50);
+    // lv2h_inst_play(inst[0], "midi_in", 0, note, -1, -1, -1, 0x70, 40);
+    lv2h_inst_play(inst[0], "event_in", 0, note, -1, -1, -1, 0x70, 40);
     return 0;
 }
 
