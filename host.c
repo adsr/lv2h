@@ -1,13 +1,20 @@
 #include "lv2h.h"
 
-static int lv2h_process_tick(lv2h_t *host);
-static int lv2h_process_node(lv2h_node_t *node, lv2h_event_t *ev);
-static int lv2h_port_init(lv2h_port_t *port, uint32_t port_num, lv2h_inst_t *inst);
-static int lv2h_port_deinit(lv2h_port_t *port);
+static int lv2h_inst_xnnect(lv2h_inst_t *writer_inst, char *writer_port_name, lv2h_inst_t *reader_inst, char *reader_port_name, int disconnect);
+static int lv2h_inst_xnnect_to_audio(lv2h_inst_t *writer_inst, char *writer_port_name, int audio_channel, int disconnect);
+static int lv2h_inst_get_port(lv2h_inst_t *inst, char *port_name, int is_audio, int is_midi, int is_input, lv2h_port_t **out_port);
+static int lv2h_inst_get_audio_output_port(lv2h_inst_t *inst, char *port_name, lv2h_port_t **out_port);
+static int lv2h_inst_get_audio_input_port(lv2h_inst_t *inst, char *port_name, lv2h_port_t **out_port);
+static int lv2h_inst_get_midi_input_port(lv2h_inst_t *inst, char *port_name, lv2h_port_t **out_port);
 static LV2_URID lv2h_map_uri(LV2_URID_Map_Handle handle, const char *uri);
 static const char *lv2h_unmap_uri(LV2_URID_Map_Handle handle, LV2_URID urid);
 static void lv2h_inst_set_port_value(const char *port_name, void *user_data, const void *value, uint32_t size, uint32_t type);
 static uint32_t lv2h_inst_port_index(lv2h_inst_t *inst, const char *port_name);
+static int lv2h_process_tick(lv2h_t *host);
+static int lv2h_process_node(lv2h_node_t *node, lv2h_event_t *ev);
+static int lv2h_port_init(lv2h_port_t *port, uint32_t port_index, lv2h_inst_t *inst);
+static int lv2h_port_deinit(lv2h_port_t *port);
+static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter, int depth);
 
 int lv2h_new(uint32_t sample_rate, size_t block_size, long tick_ms, lv2h_t **out_lv2h) {
     lv2h_t *host;
@@ -46,16 +53,21 @@ int lv2h_new(uint32_t sample_rate, size_t block_size, long tick_ms, lv2h_t **out
     host->features[1] = &host->feature_unmap;
     host->features[2] = NULL;
 
-    host->audio_out[0] = calloc(block_size, sizeof(float));
-    host->audio_out[1] = calloc(block_size, sizeof(float));
+    host->audio_plug = calloc(1, sizeof(lv2h_plug_t));
+    host->audio_plug->host = host;
+    host->audio_plug->port_count = 2;
+
+    host->audio_inst = calloc(1, sizeof(lv2h_inst_t));
+    host->audio_inst->plug = host->audio_plug;
+    host->audio_inst->port_array = calloc(2, sizeof(lv2h_port_t));
+    host->audio_inst->port_array[0].reader_block_mixed = calloc(block_size, sizeof(float));
+    host->audio_inst->port_array[1].reader_block_mixed = calloc(block_size, sizeof(float));
 
     *out_lv2h = host;
-
     return LV2H_OK;
 }
 
 int lv2h_free(lv2h_t *host) {
-    lv2h_conn_t *conn, *conn_tmp;
     lv2h_plug_t *plug, *plug_tmp;
 
     HASH_ITER(hh, host->plugin_map, plug, plug_tmp) {
@@ -63,16 +75,11 @@ int lv2h_free(lv2h_t *host) {
         HASH_DEL(host->plugin_map, plug);
     }
 
-    LL_FOREACH_SAFE(host->conn_list, conn, conn_tmp) {
-        lv2h_conn_free(conn);
-        LL_DELETE(host->conn_list, conn);
-    }
-
-    // TODO free lv2h_node_t *parent_node_list;
-    // TODO free lv2h_plug_t *audio_plugin;
-    // TODO free lv2h_inst_t *audio_inst;
-    // TODO free lv2h_event_t *event_list;
-    // TODO free? float *audio_out[2];
+    free(host->audio_inst->port_array[0].reader_block_mixed);
+    free(host->audio_inst->port_array[1].reader_block_mixed);
+    free(host->audio_inst->port_array);
+    free(host->audio_inst);
+    free(host->audio_plug);
 
     lilv_node_free(host->lv2_core_InputPort);
     lilv_node_free(host->lv2_core_OutputPort);
@@ -114,34 +121,6 @@ int lv2h_run(lv2h_t *host) {
     return LV2H_OK;
 }
 
-static int lv2h_process_tick(lv2h_t *host) {
-    lv2h_event_t *ev, *ev_tmp;
-    LL_FOREACH_SAFE(host->event_list, ev, ev_tmp) {
-        if (ev->timestamp_ns >= host->ts_now_ns) {
-            LL_DELETE(host->event_list, ev);
-            lv2h_process_node(ev->node, ev);
-        } else {
-            break; // TODO nodes should be inserted with LL_INSERT_INORDER
-        }
-    }
-    return LV2H_OK;
-}
-
-static int lv2h_process_node(lv2h_node_t *node, lv2h_event_t *ev) {
-    // TODO
-    // invoke callback
-    // incr count
-    // check count limit
-    // bail if over limit
-    // if child:
-    //    schedule next event based on divisor/mult, count, and parent->ts_(last|next)_ns, delay_ns
-    // else parent:
-    //    apply accel if any
-    //    schedule next event based on interval_ns
-    (void)node;
-    (void)ev;
-    return LV2H_OK;
-}
 
 
 
@@ -169,8 +148,22 @@ int lv2h_plug_new(lv2h_t *host, char *uri_str, lv2h_plug_t **out_plug) {
     return LV2H_OK;
 }
 
+int lv2h_plug_free(lv2h_plug_t *plugin) {
+    lv2h_inst_t *inst, *inst_tmp;
+    LL_FOREACH_SAFE(plugin->inst_list, inst, inst_tmp) {
+        lv2h_inst_free(inst);
+        LL_DELETE(plugin->inst_list, inst);
+    }
+    lilv_node_free(plugin->lilv_uri);
+    free(plugin->uri_str);
+    free(plugin);
+    return LV2H_OK;
+}
+
+
 int lv2h_inst_new(lv2h_plug_t *plug, lv2h_inst_t **out_inst) {
     lv2h_inst_t *inst;
+    lv2h_port_t *port;
     uint32_t i;
 
     inst = calloc(1, sizeof(lv2h_inst_t));
@@ -179,7 +172,9 @@ int lv2h_inst_new(lv2h_plug_t *plug, lv2h_inst_t **out_inst) {
     inst->port_array = calloc(plug->port_count, sizeof(lv2h_port_t));
 
     for (i = 0; i < plug->port_count; ++i) {
-        lv2h_port_init(inst->port_array + i, i, inst);
+        port = inst->port_array + i;
+        lv2h_port_init(port, i, inst);
+        HASH_ADD_STR(inst->port_map, port_name, port);
     }
 
     lilv_instance_activate(inst->lilv_inst);
@@ -201,6 +196,7 @@ int lv2h_inst_free(lv2h_inst_t *inst) {
 
     for (i = 0; i < inst->plug->port_count; ++i) {
         lv2h_port_deinit(&inst->port_array[i]);
+        HASH_DEL(inst->port_map, inst->port_array + i);
     }
 
     free(inst->port_array);
@@ -211,53 +207,49 @@ int lv2h_inst_free(lv2h_inst_t *inst) {
     return LV2H_OK;
 }
 
-static int lv2h_port_init(lv2h_port_t *port, uint32_t port_index, lv2h_inst_t *inst) {
-    lv2h_t *host;
-    lv2h_plug_t *plug;
-    const LilvPlugin *lilv_plug;
-    const LilvPort *lilv_port;
-    LilvInstance *lilv_inst;
+    // send note
+    //uint8_t msg[3] = {0x90, 0x40, 0x7f};
+    //LV2_Evbuf_Iterator end = lv2_evbuf_begin(evbuf);
+    //lv2_evbuf_write(&end, 0, 0, lv2h_map_uri(host, LV2_MIDI__MidiEvent), 3, msg);
 
-    plug = inst->plug;
-    host = plug->host;
-    lilv_plug = plug->lilv_plugin;
-    lilv_inst = inst->lilv_inst;
-    lilv_port = lilv_plugin_get_port_by_index(lilv_plug, port_index);
+    // play
+    //run_audio();
 
-    port->inst = inst;
-    port->lilv_port = lilv_port;
-    port->port_index = port_index;
-    port->port_name = strdup(lilv_node_as_string(lilv_port_get_symbol(lilv_plug, lilv_port)));
+int lv2h_inst_connect(lv2h_inst_t *writer_inst, char *writer_port_name, lv2h_inst_t *reader_inst, char *reader_port_name) {
+    return lv2h_inst_xnnect(writer_inst, writer_port_name, reader_inst, reader_port_name, 0);
+}
 
-    if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_ControlPort)) {
-        port->control_val = plug->port_defaults[port_index];
-        lilv_instance_connect_port(lilv_inst, port_index, &port->control_val);
-    } else if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_AudioPort) || lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_CVPort)) {
-        port->audio_null = calloc(host->block_size, sizeof(float));
-        if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_InputPort)) {
-            lilv_instance_connect_port(lilv_inst, port_index, port->audio_null);
-        } else if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_OutputPort)) {
-            lilv_instance_connect_port(lilv_inst, port_index, port->audio_null);
-        }
-    } else if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_atom_AtomPort)) {
-        if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_InputPort)) {
-            port->atom_input = lv2_evbuf_new(1024, LV2_EVBUF_ATOM, 0, lv2h_map_uri(host, LV2_ATOM__Sequence));
-            lilv_instance_connect_port(lilv_inst, port_index, port->atom_input);
-        } else {
-            port->atom_output = (LV2_Atom_Sequence*)calloc(1, sizeof(LV2_Atom_Sequence) + 1024);
-            lilv_instance_connect_port(lilv_inst, port_index, port->atom_output);
-        }
+int lv2h_inst_disconnect(lv2h_inst_t *writer_inst, char *writer_port_name, lv2h_inst_t *reader_inst, char *reader_port_name) {
+    return lv2h_inst_xnnect(writer_inst, writer_port_name, reader_inst, reader_port_name, 1);
+}
+
+int lv2h_inst_connect_to_audio(lv2h_inst_t *writer_inst, char *writer_port_name, int audio_channel) {
+    return lv2h_inst_xnnect_to_audio(writer_inst, writer_port_name, audio_channel, 0);
+}
+
+int lv2h_inst_disconnect_from_audio(lv2h_inst_t *writer_inst, char *writer_port_name, int audio_channel) {
+    return lv2h_inst_xnnect_to_audio(writer_inst, writer_port_name, audio_channel, 1);
+}
+
+int lv2h_inst_send_midi(lv2h_inst_t *inst, char *port_name, uint8_t *bytes, int bytes_len) {
+    lv2h_port_t *port;
+    LV2_Evbuf_Iterator end;
+
+    if (lv2h_inst_get_midi_input_port(inst, port_name, &port) != LV2H_OK) {
+        return LV2H_ERR;
     }
 
+    end = lv2_evbuf_end(port->atom_input);
+    lv2_evbuf_write(&end, 0, 0, lv2h_map_uri(inst->plug->host, LV2_MIDI__MidiEvent), bytes_len, bytes);
     return LV2H_OK;
 }
 
-static int lv2h_port_deinit(lv2h_port_t *port) {
-    free(port->port_name);
-    if (port->audio_null) free(port->audio_null);
-    if (port->atom_input) free(port->atom_input);
-    if (port->atom_output) free(port->atom_output);
-    return LV2H_OK;
+int lv2h_inst_set_param(lv2h_inst_t *inst, char *port_name, float val) {
+    return 0;
+}
+
+int lv2h_inst_play(lv2h_inst_t *inst, char *port_name, uint8_t *notes, int notes_len, int vel, long len_ms) {
+    return 0;
 }
 
 int lv2h_inst_load_preset(lv2h_inst_t *inst, char *preset_str) {
@@ -271,34 +263,110 @@ int lv2h_inst_load_preset(lv2h_inst_t *inst, char *preset_str) {
     return LV2H_OK;
 }
 
-    // send note
-    //uint8_t msg[3] = {0x90, 0x40, 0x7f};
-    //LV2_Evbuf_Iterator end = lv2_evbuf_begin(evbuf);
-    //lv2_evbuf_write(&end, 0, 0, lv2h_map_uri(host, LV2_MIDI__MidiEvent), 3, msg);
+int lv2h_run_plugin_insts(lv2h_t *host, int frame_count) {
+    host->current_iter += 1;
+    lv2h_run_plugin_inst(host->audio_inst, frame_count, host->current_iter, 0);
+    return LV2H_OK;
+}
 
-    // play
-    //run_audio();
+static int lv2h_inst_xnnect(lv2h_inst_t *writer_inst, char *writer_port_name, lv2h_inst_t *reader_inst, char *reader_port_name, int disconnect) {
+    lv2h_t *host;
+    lv2h_port_t *writer_port, *reader_port;
+    const LilvPort *lilv_writer_port, *lilv_reader_port;
+    const LilvPlugin *lilv_writer_plugin, *lilv_reader_plugin;
+    size_t i;
+
+    host = writer_inst->plug->host;
 
 
-int lv2h_plug_free(lv2h_plug_t *plugin) {
-    lv2h_inst_t *inst, *inst_tmp;
-    LL_FOREACH_SAFE(plugin->inst_list, inst, inst_tmp) {
-        lv2h_inst_free(inst);
-        LL_DELETE(plugin->inst_list, inst);
+    if (lv2h_inst_get_audio_output_port(writer_inst, writer_port_name, &writer_port) != LV2H_OK) {
+        return LV2H_ERR;
     }
-    lilv_node_free(plugin->lilv_uri);
-    free(plugin->uri_str);
-    free(plugin);
+    if (lv2h_inst_get_audio_input_port(reader_inst, reader_port_name, &reader_port) != LV2H_OK) {
+        return LV2H_ERR;
+    }
+
+    if (disconnect) {
+        LL_DELETE(reader_port->writer_port_list, writer_port);
+    } else {
+        LL_APPEND(reader_port->writer_port_list, writer_port);
+    }
+
     return LV2H_OK;
 }
 
+static int lv2h_inst_xnnect_to_audio(lv2h_inst_t *writer_inst, char *writer_port_name, int audio_channel, int disconnect) {
+    lv2h_t *host;
+    lv2h_port_t *writer_port;
 
-int lv2h_conn_free(lv2h_conn_t *conn) {
-    free(conn->reader_ptr_array);
-    free(conn->data);
-    free(conn);
+    host = writer_inst->plug->host;
+    if (audio_channel != 0 && audio_channel != 1) {
+        LV2H_RETURN_ERR(host, "lv2h_inst_xnnect_to_audio: invalid audio_channel %d (must be 0 or 1)\n", audio_channel);
+    }
+
+    if (lv2h_inst_get_audio_output_port(writer_inst, writer_port_name, &writer_port) != LV2H_OK) {
+        return LV2H_ERR;
+    }
+
+    if (disconnect) {
+        LL_DELETE(host->audio_inst->port_array[audio_channel].writer_port_list, writer_port);
+    } else {
+        LL_APPEND(host->audio_inst->port_array[audio_channel].writer_port_list, writer_port);
+    }
+
     return LV2H_OK;
 }
+
+static int lv2h_inst_get_port(lv2h_inst_t *inst, char *port_name, int is_audio, int is_midi, int is_input, lv2h_port_t **out_port) {
+    lv2h_t *host;
+    lv2h_port_t *port;
+
+    host = inst->plug->host;
+    HASH_FIND_STR(inst->port_map, port_name, port);
+    if (!port) {
+        LV2H_RETURN_ERR(host, "lv2h_inst_get_port: port %s not found\n", port_name);
+    }
+
+    if (is_audio) {
+        if (is_input) {
+            if (!port->reader_block_mixed) {
+                LV2H_RETURN_ERR(host, "lv2h_inst_get_port: port %s is not an audio/CV input\n", port_name);
+            }
+        } else {
+            if (!port->writer_block) {
+                LV2H_RETURN_ERR(host, "lv2h_inst_get_port: port %s is not an audio/CV output\n", port_name);
+            }
+        }
+    }
+
+    if (is_midi) {
+        if (is_input) {
+            if (!port->atom_input) {
+                LV2H_RETURN_ERR(host, "lv2h_inst_get_port: port %s is not a MIDI input\n", port_name);
+            }
+        } else {
+            if (!port->atom_output) {
+                LV2H_RETURN_ERR(host, "lv2h_inst_get_port: port %s is not a MIDI output\n", port_name);
+            }
+        }
+    }
+
+    *out_port = port;
+    return LV2H_OK;
+}
+
+static int lv2h_inst_get_audio_output_port(lv2h_inst_t *inst, char *port_name, lv2h_port_t **out_port) {
+    return lv2h_inst_get_port(inst, port_name, 1, 0, 0, out_port);
+}
+
+static int lv2h_inst_get_audio_input_port(lv2h_inst_t *inst, char *port_name, lv2h_port_t **out_port) {
+    return lv2h_inst_get_port(inst, port_name, 1, 0, 1, out_port);
+}
+
+static int lv2h_inst_get_midi_input_port(lv2h_inst_t *inst, char *port_name, lv2h_port_t **out_port) {
+    return lv2h_inst_get_port(inst, port_name, 0, 1, 1, out_port);
+}
+
 
 static LV2_URID lv2h_map_uri(LV2_URID_Map_Handle handle, const char *uri) {
     lv2h_t *host;
@@ -351,8 +419,120 @@ static uint32_t lv2h_inst_port_index(lv2h_inst_t *inst, const char *port_name) {
     return lilv_port_get_index(inst->plug->lilv_plugin, port);
 }
 
-int lv2h_run_plugin_insts(lv2h_t *host, int frame_count) {
-    (void)host;
-    (void)frame_count;
+
+static int lv2h_process_tick(lv2h_t *host) {
+    lv2h_event_t *ev, *ev_tmp;
+    LL_FOREACH_SAFE(host->event_list, ev, ev_tmp) {
+        if (ev->timestamp_ns >= host->ts_now_ns) {
+            LL_DELETE(host->event_list, ev);
+            lv2h_process_node(ev->node, ev);
+        } else {
+            break; // TODO nodes should be inserted with LL_INSERT_INORDER
+        }
+    }
+    return LV2H_OK;
+}
+
+static int lv2h_process_node(lv2h_node_t *node, lv2h_event_t *ev) {
+    // TODO
+    // invoke callback
+    // incr count
+    // check count limit
+    // bail if over limit
+    // if child:
+    //    schedule next event based on divisor/mult, count, and parent->ts_(last|next)_ns, delay_ns
+    // else parent:
+    //    apply accel if any
+    //    schedule next event based on interval_ns
+    (void)node;
+    (void)ev;
+    return LV2H_OK;
+}
+
+static int lv2h_port_init(lv2h_port_t *port, uint32_t port_index, lv2h_inst_t *inst) {
+    lv2h_t *host;
+    lv2h_plug_t *plug;
+    const LilvPlugin *lilv_plug;
+    const LilvPort *lilv_port;
+    LilvInstance *lilv_inst;
+
+    plug = inst->plug;
+    host = plug->host;
+    lilv_plug = plug->lilv_plugin;
+    lilv_inst = inst->lilv_inst;
+    lilv_port = lilv_plugin_get_port_by_index(lilv_plug, port_index);
+
+    port->inst = inst;
+    port->lilv_port = lilv_port;
+    port->port_index = port_index;
+    port->port_name = strdup(lilv_node_as_string(lilv_port_get_symbol(lilv_plug, lilv_port)));
+
+    if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_ControlPort)) {
+        port->control_val = plug->port_defaults[port_index];
+        lilv_instance_connect_port(lilv_inst, port_index, &port->control_val);
+    } else if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_AudioPort) || lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_CVPort)) {
+        if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_InputPort)) {
+            port->reader_block_mixed = calloc(host->block_size, sizeof(float));
+            lilv_instance_connect_port(lilv_inst, port_index, port->reader_block_mixed);
+        } else {
+            port->writer_block = calloc(host->block_size, sizeof(float));
+            lilv_instance_connect_port(lilv_inst, port_index, port->writer_block);
+        }
+    } else if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_atom_AtomPort)) {
+        if (lilv_port_is_a(lilv_plug, lilv_port, host->lv2_core_InputPort)) {
+            port->atom_input = lv2_evbuf_new(1024, LV2_EVBUF_ATOM, 0, lv2h_map_uri(host, LV2_ATOM__Sequence));
+            lilv_instance_connect_port(lilv_inst, port_index, port->atom_input);
+        } else {
+            port->atom_output = (LV2_Atom_Sequence*)calloc(1, sizeof(LV2_Atom_Sequence) + 1024);
+            lilv_instance_connect_port(lilv_inst, port_index, port->atom_output);
+        }
+    }
+
+    return LV2H_OK;
+}
+
+static int lv2h_port_deinit(lv2h_port_t *port) {
+    free(port->port_name);
+    if (port->writer_block) free(port->writer_block);
+    if (port->reader_block_mixed) free(port->reader_block_mixed);
+    if (port->atom_input) free(port->atom_input);
+    if (port->atom_output) free(port->atom_output);
+    return LV2H_OK;
+}
+
+static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter, int depth) {
+    lv2h_t *host;
+    lv2h_port_t *reader_port, *writer_port;
+    uint32_t p;
+    size_t w;
+    int f;
+
+    // TODO check depth
+
+    host = inst->plug->host;
+
+    for (p = 0; p < inst->plug->port_count; ++p) {
+        reader_port = inst->port_array + p;
+        LL_FOREACH(reader_port->writer_port_list, writer_port) {
+            if (writer_port->inst->current_iter != iter) {
+                lv2h_run_plugin_inst(writer_port->inst, frame_count, iter, depth + 1);
+            }
+        }
+        w = 0;
+        LL_FOREACH(reader_port->writer_port_list, writer_port) {
+            if (w == 0) {
+                memcpy(reader_port->reader_block_mixed, writer_port->writer_block, sizeof(float) * inst->plug->host->block_size);
+            } else {
+                for (f = 0; f < host->block_size; ++f) {
+                    reader_port->reader_block_mixed[f] += writer_port->writer_block[f];
+                }
+            }
+            w += 1;
+        }
+    }
+    if (inst->current_iter != iter && inst != host->audio_inst) {
+        lilv_instance_run(inst->lilv_inst, frame_count);
+        inst->current_iter = iter;
+    }
     return LV2H_OK;
 }

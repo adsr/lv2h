@@ -2,6 +2,8 @@
 
 static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_count_min, int frame_count_max);
 
+extern  lv2h_inst_t *mono;
+
 static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_count_min, int frame_count_max) {
     lv2h_t *host;
     struct SoundIoChannelArea *areas;
@@ -12,6 +14,8 @@ static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_co
     int frame;
     int frame_count;
     int frames_left;
+
+uint8_t msg[3];
 
     (void)frame_count_min;
 
@@ -29,12 +33,19 @@ static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_co
             break;
         }
 
+
+msg[0] = 0x90;
+msg[1] = 0x60;
+msg[2] = 0x7f;
+
+lv2h_inst_send_midi(mono, "midi_in", msg, 3);
+
         lv2h_run_plugin_insts(host, frame_count);
 
         for (frame = 0; frame < frame_count; frame += 1) {
             for (channel = 0; channel < layout->channel_count; channel += 1) {
                 sample_ptr = (float*)(areas[channel].ptr + areas[channel].step * frame);
-                *sample_ptr = host->audio_out[channel][frame];
+                *sample_ptr = host->audio_inst->port_array[channel].reader_block_mixed[frame];
             }
         }
 

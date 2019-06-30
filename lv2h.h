@@ -39,7 +39,6 @@ typedef struct _lv2h_t lv2h_t;
 typedef struct _lv2h_plug_t lv2h_plug_t;
 typedef struct _lv2h_inst_t lv2h_inst_t;
 typedef struct _lv2h_port_t lv2h_port_t;
-typedef struct _lv2h_conn_t lv2h_conn_t;
 typedef struct _lv2h_node_t lv2h_node_t;
 typedef struct _lv2h_event_t lv2h_event_t;
 typedef int (*lv2h_node_callback_fn)(lv2h_node_t *node, void *udata, int count);
@@ -47,16 +46,15 @@ typedef int (*lv2h_node_callback_fn)(lv2h_node_t *node, void *udata, int count);
 struct _lv2h_t {
     lv2h_plug_t *plugin_map;
     lv2h_node_t *parent_node_list;
-    lv2h_plug_t *audio_plugin;
+    lv2h_plug_t *audio_plug;
     lv2h_inst_t *audio_inst;
-    lv2h_conn_t *conn_list;
     lv2h_event_t *event_list;
     int sample_rate;
     long tick_ns;
     int block_size;
     long ts_now_ns;
     long ts_next_ns;
-    float *audio_out[2];
+    float *audio_block_array;
     LilvWorld *lilv_world;
     const LilvPlugins *lilv_plugins;
     LilvNode *lv2_core_InputPort;
@@ -74,6 +72,7 @@ struct _lv2h_t {
     LV2_URID_Unmap urid_unmap;
     char **lv2_uris;
     size_t lv2_uris_size;
+    size_t current_iter;
     int done;
     char errstr[1024];
 };
@@ -93,9 +92,10 @@ struct _lv2h_plug_t {
 
 struct _lv2h_inst_t {
     lv2h_plug_t *plug;
+    size_t current_iter;
     LilvInstance *lilv_inst;
     lv2h_port_t *port_array;
-    // lv2h_port_t *port_map;
+    lv2h_port_t *port_map;
     lv2h_inst_t *next;
 };
 
@@ -105,23 +105,13 @@ struct _lv2h_port_t {
     uint32_t port_index;
     char *port_name;
     float control_val;
-    float *audio_null;
+    float *writer_block;
+    float *reader_block_mixed;
     LV2_Atom_Sequence *atom_output;
     LV2_Evbuf *atom_input; // TODO replace type
-    lv2h_conn_t **conn_ptr_array;
-    size_t conn_count;
-    size_t conn_size;
-    // UT_hash_handle hh;
-};
-
-struct _lv2h_conn_t {
-    lv2h_port_t *writer;
-    lv2h_port_t **reader_ptr_array;
-    size_t reader_count;
-    size_t reader_size;
-    float *data;
-    size_t data_size;
-    lv2h_conn_t *next;
+    lv2h_port_t *writer_port_list;
+    lv2h_port_t *next;
+    UT_hash_handle hh;
 };
 
 struct _lv2h_node_t {
@@ -144,23 +134,24 @@ struct _lv2h_event_t {
     lv2h_event_t *next;
 };
 
+
 LV2H_API int lv2h_new(uint32_t sample_rate, size_t block_size, long tick_ms, lv2h_t **out_lv2h);
-LV2H_API int lv2h_free(lv2h_t *lv2h);
-LV2H_API int lv2h_run(lv2h_t *lv2h);
+LV2H_API int lv2h_free(lv2h_t *host);
+LV2H_API int lv2h_run(lv2h_t *host);
 
-LV2H_API int lv2h_plug_new(lv2h_t *lv2h, char *uri, lv2h_plug_t **out_plug);
-LV2H_API int lv2h_plug_free(lv2h_plug_t *plug);
+LV2H_API int lv2h_plug_new(lv2h_t *host, char *uri_str, lv2h_plug_t **out_plug);
+LV2H_API int lv2h_plug_free(lv2h_plug_t *plugin);
 
-LV2H_API int lv2h_inst_new(lv2h_plug_t *plugin, lv2h_inst_t **out_inst);
+LV2H_API int lv2h_inst_new(lv2h_plug_t *plug, lv2h_inst_t **out_inst);
 LV2H_API int lv2h_inst_free(lv2h_inst_t *inst);
-LV2H_API int lv2h_inst_load_preset(lv2h_inst_t *inst, char *preset);
-LV2H_API int lv2h_inst_connect(lv2h_inst_t *writer_inst, char *writer_port_name, lv2h_inst_t *reader_inst, char *reader_port_name, lv2h_conn_t **out_conn);
+LV2H_API int lv2h_inst_connect(lv2h_inst_t *writer_inst, char *writer_port_name, lv2h_inst_t *reader_inst, char *reader_port_name);
 LV2H_API int lv2h_inst_disconnect(lv2h_inst_t *writer_inst, char *writer_port_name, lv2h_inst_t *reader_inst, char *reader_port_name);
-LV2H_API int lv2h_inst_play(lv2h_inst_t *inst, int *notes, int notes_len, int vel, long len_ms);
-LV2H_API int lv2h_inst_send_midi(lv2h_inst_t *inst, int *bytes, int bytes_len);
+LV2H_API int lv2h_inst_connect_to_audio(lv2h_inst_t *writer_inst, char *writer_port_name, int audio_channel);
+LV2H_API int lv2h_inst_disconnect_from_audio(lv2h_inst_t *writer_inst, char *writer_port_name, int audio_channel);
+LV2H_API int lv2h_inst_send_midi(lv2h_inst_t *inst, char *port_name, uint8_t *bytes, int bytes_len);
 LV2H_API int lv2h_inst_set_param(lv2h_inst_t *inst, char *port_name, float val);
-
-LV2H_API int lv2h_conn_free(lv2h_conn_t *conn);
+LV2H_API int lv2h_inst_play(lv2h_inst_t *inst, char *port_name, uint8_t *notes, int notes_len, int vel, long len_ms);
+LV2H_API int lv2h_inst_load_preset(lv2h_inst_t *inst, char *preset_str);
 
 LV2H_API int lv2h_node_new(lv2h_t *lv2h, lv2h_node_callback_fn *callback, void *udata, lv2h_node_t **out_node);
 LV2H_API int lv2h_node_free(lv2h_node_t *node);
