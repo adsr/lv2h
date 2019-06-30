@@ -2,54 +2,6 @@
 
 static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_count_min, int frame_count_max);
 
-extern  lv2h_inst_t *mono;
-
-static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_count_min, int frame_count_max) {
-    lv2h_t *host;
-    struct SoundIoChannelArea *areas;
-    struct SoundIoChannelLayout *layout;
-    float *sample_ptr;
-    int channel;
-    int err;
-    int frame;
-    int frame_count;
-    int frames_left;
-
-    (void)frame_count_min;
-
-    host = (lv2h_t*)outstream->userdata;
-    layout = &outstream->layout;
-    frames_left = frame_count_max;
-
-    while (frames_left > 0) {
-        frame_count = frames_left < host->block_size ? frames_left : host->block_size;
-
-        if ((err = soundio_outstream_begin_write(outstream, &areas, &frame_count))) {
-            LV2H_RETURN_ERR_VOID(host, "audio: soundio_outstream_begin_write error: %s\n", soundio_strerror(err));
-        }
-        if (frame_count < 1) {
-            break;
-        }
-
-        // TODO mutex for data shared by threads
-        lv2h_run_plugin_insts(host, frame_count);
-
-        for (frame = 0; frame < frame_count; frame += 1) {
-            for (channel = 0; channel < layout->channel_count; channel += 1) {
-                sample_ptr = (float*)(areas[channel].ptr + areas[channel].step * frame);
-                *sample_ptr = host->audio_inst->port_array[channel].reader_block_mixed[frame];
-            }
-        }
-
-        if ((err = soundio_outstream_end_write(outstream))) {
-            LV2H_RETURN_ERR_VOID(host, "audio: soundio_outstream_end_write error: %s\n", soundio_strerror(err));
-        }
-
-        frames_left -= frame_count;
-    }
-}
-
-
 void *lv2h_run_audio(void *arg) {
     lv2h_t *host;
     struct SoundIoDevice *device;
@@ -102,4 +54,49 @@ void *lv2h_run_audio(void *arg) {
     soundio_device_unref(device);
     soundio_destroy(soundio);
     return NULL;
+}
+
+static void lv2h_audio_callback(struct SoundIoOutStream *outstream, int frame_count_min, int frame_count_max) {
+    lv2h_t *host;
+    struct SoundIoChannelArea *areas;
+    struct SoundIoChannelLayout *layout;
+    float *sample_ptr;
+    int channel;
+    int err;
+    int frame;
+    int frame_count;
+    int frames_left;
+
+    (void)frame_count_min;
+
+    host = (lv2h_t*)outstream->userdata;
+    layout = &outstream->layout;
+    frames_left = frame_count_max;
+
+    while (frames_left > 0) {
+        frame_count = frames_left < host->block_size ? frames_left : host->block_size;
+
+        if ((err = soundio_outstream_begin_write(outstream, &areas, &frame_count))) {
+            LV2H_RETURN_ERR_VOID(host, "audio: soundio_outstream_begin_write error: %s\n", soundio_strerror(err));
+        }
+        if (frame_count < 1) {
+            break;
+        }
+
+        // TODO mutex for data shared by threads
+        lv2h_run_plugin_insts(host, frame_count);
+
+        for (frame = 0; frame < frame_count; frame += 1) {
+            for (channel = 0; channel < layout->channel_count; channel += 1) {
+                sample_ptr = (float*)(areas[channel].ptr + areas[channel].step * frame);
+                *sample_ptr = host->audio_inst->port_array[channel].reader_block_mixed[frame];
+            }
+        }
+
+        if ((err = soundio_outstream_end_write(outstream))) {
+            LV2H_RETURN_ERR_VOID(host, "audio: soundio_outstream_end_write error: %s\n", soundio_strerror(err));
+        }
+
+        frames_left -= frame_count;
+    }
 }

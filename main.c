@@ -1,7 +1,7 @@
 #include "lv2h.h"
 
 static void *lv2h_run_play(void *arg);
-
+static int lv2h_node_callback(lv2h_node_t *node, void *udata, int count);
 
 static pthread_t audio_thread;
 static pthread_t play_thread;
@@ -10,15 +10,16 @@ static lv2h_inst_t *inst[4];
 
 int main(int argc, char **argv) {
     lv2h_t *host;
+    lv2h_node_t *node;
 
     (void)argc;
     (void)argv;
 
-    lv2h_new(44100, 128, 10, &host);
+    lv2h_new(44100, 128, 5, &host);
 
     lv2h_plug_new(host, "http://calf.sourceforge.net/plugins/Monosynth", &plug[0]);
     lv2h_inst_new(plug[0], &inst[0]);
-    lv2h_inst_load_preset(inst[0], "http://calf.sourceforge.net/factory_presets#monosynth_FatCats");
+    lv2h_inst_load_preset(inst[0], "http://calf.sourceforge.net/factory_presets#monosynth_SquareWorm");
 
     lv2h_plug_new(host, "http://calf.sourceforge.net/plugins/VintageDelay", &plug[1]);
     lv2h_inst_new(plug[1], &inst[1]);
@@ -29,9 +30,14 @@ int main(int argc, char **argv) {
     lv2h_inst_connect_to_audio(inst[1], "out_l", 0);
     lv2h_inst_connect_to_audio(inst[1], "out_r", 1);
 
+    lv2h_node_new(host, lv2h_node_callback, NULL, &node);
+    lv2h_node_set_interval(node, 100);
+    node->count_limit = 10;
 
-    pthread_create(&play_thread, NULL, lv2h_run_play, host);
+    // pthread_create(&play_thread, NULL, lv2h_run_play, host);
     pthread_create(&audio_thread, NULL, lv2h_run_audio, host);
+
+    sleep(1);
 
     lv2h_run(host);
     lv2h_free(host);
@@ -42,13 +48,24 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+static int lv2h_node_callback(lv2h_node_t *node, void *udata, int count) {
+    printf("count=%d\n", count);
+    // lv2h_inst_play(inst[0], "midi_in", 0, 0x30 + count, 0x30 + count + 3,  0x30 + count + 3 + 4, -1, 0x70, 500);
+    lv2h_inst_play(inst[0], "midi_in", 0, 0x30 + count, -1, -1, -1, 0x70, 50);
+    return 0;
+}
+
 static void *lv2h_run_play(void *arg) {
+    lv2h_t *host;
     uint8_t msg[3];
     msg[0] = 0x90;
     msg[1] = 0x30;
     msg[2] = 0x7f;
+    int i;
 
-    while (1) {
+    host = (lv2h_t*)arg;
+
+    for (i = 0; i < 5; i++) {
         msg[0] = 0x90;
         msg[1] += 1;
         msg[2] = 0x70;
@@ -62,4 +79,7 @@ static void *lv2h_run_play(void *arg) {
         printf("sent note off\n");
         sleep(1);
     }
+
+    host->done = 1;
+    return NULL;
 }
