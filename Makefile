@@ -14,10 +14,13 @@ lv2h: $(lv2h_vendor_deps) $(lv2h_objects)
 $(lv2h_objects): %.o: %.c
 	$(CC) -c $(lv2h_cflags) $< -o $@
 
+run: clean all
+	./lv2h
+
 install: lv2h
 	install -D -v -m 755 lv2h $(DESTDIR)$(prefix)/bin/lv2h
 
 clean:
 	rm -f lv2h $(lv2h_objects)
 
-.PHONY: all install clean
+.PHONY: all run install clean

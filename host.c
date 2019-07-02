@@ -14,7 +14,7 @@ static void lv2h_inst_set_port_value(const char *port_name, void *user_data, con
 static uint32_t lv2h_inst_port_index(lv2h_inst_t *inst, const char *port_name);
 static int lv2h_port_init(lv2h_port_t *port, uint32_t port_index, lv2h_inst_t *inst);
 static int lv2h_port_deinit(lv2h_port_t *port);
-static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter, int depth);
+static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, uintmax_t audio_iter, int depth);
 
 typedef struct _lv2h_note_on_t lv2h_note_on_t;
 
@@ -265,11 +265,12 @@ int lv2h_inst_play(lv2h_inst_t *inst, char *port_name, int chan, int note1, int 
         }
         note_on = calloc(1, sizeof(lv2h_note_on_t)); // TODO preallocate note offs
         note_on->inst = inst;
-        note_on->port_name = port_name; // TODO strdup or use port pointer
+        note_on->port_name = port_name; // TODO strdup or use port pointer?
         note_on->msg[0] = msg[0];
         note_on->msg[1] = msg[1];
         note_on->msg[2] = msg[2];
-        lv2h_schedule_event(host, host->ts_now_ns + (len_ms * 1000000L), lv2h_process_note_off, note_on);
+        // Set audio_run_delay=1 to prevent a note_off on the same run as a note on
+        lv2h_schedule_event(host, host->ts_now_ns + (len_ms * 1000000L), 1, lv2h_process_note_off, note_on);
     }
     return LV2H_OK;
 }
@@ -289,8 +290,8 @@ int lv2h_inst_load_preset(lv2h_inst_t *inst, char *preset_str) {
 }
 
 int lv2h_run_plugin_insts(lv2h_t *host, int frame_count) {
-    host->current_iter += 1;
-    lv2h_run_plugin_inst(host->audio_inst, frame_count, host->current_iter, 0);
+    lv2h_run_plugin_inst(host->audio_inst, frame_count, host->audio_iter, 0);
+    __sync_fetch_and_add(&host->audio_iter, 1);
     return LV2H_OK;
 }
 
@@ -518,7 +519,7 @@ static int lv2h_port_deinit(lv2h_port_t *port) {
     return LV2H_OK;
 }
 
-static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter, int depth) {
+static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, uintmax_t audio_iter, int depth) {
     lv2h_t *host;
     lv2h_port_t *reader_port, *writer_port;
     uint32_t p;
@@ -533,8 +534,8 @@ static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter,
         reader_port = inst->port_array + p;
         LL_FOREACH(reader_port->writer_port_list, writer_port) {
             // TODO optimize looping over all ports like this
-            if (writer_port->inst->current_iter != iter) {
-                lv2h_run_plugin_inst(writer_port->inst, frame_count, iter, depth + 1);
+            if (writer_port->inst->audio_iter != audio_iter) {
+                lv2h_run_plugin_inst(writer_port->inst, frame_count, audio_iter, depth + 1);
             }
         }
         w = 0;
@@ -550,7 +551,7 @@ static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter,
             w += 1;
         }
     }
-    if (inst->current_iter != iter && inst != host->audio_inst) {
+    if (inst->audio_iter != audio_iter && inst != host->audio_inst) {
 
         lilv_instance_run(inst->lilv_inst, frame_count);
 
@@ -566,7 +567,7 @@ static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, size_t iter,
         }
         pthread_mutex_unlock(&host->mutex);
 
-        inst->current_iter = iter;
+        inst->audio_iter = audio_iter;
     }
     return LV2H_OK;
 }

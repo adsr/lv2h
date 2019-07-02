@@ -75,7 +75,7 @@ struct _lv2h_t {
     LV2_URID_Unmap urid_unmap;
     char **lv2_uris;
     size_t lv2_uris_size;
-    size_t current_iter;
+    uintmax_t audio_iter;
     pthread_mutex_t mutex;
     int done;
     char errstr[1024];
@@ -96,7 +96,7 @@ struct _lv2h_plug_t {
 
 struct _lv2h_inst_t {
     lv2h_plug_t *plug;
-    size_t current_iter;
+    uintmax_t audio_iter;
     LilvInstance *lilv_inst;
     lv2h_port_t *port_array;
     lv2h_port_t *port_map;
@@ -141,6 +141,7 @@ struct _lv2h_node_t {
 
 struct _lv2h_event_t {
     lv2h_event_callback_fn callback;
+    uintmax_t min_audio_iter;
     void *udata;
     long timestamp_ns;
     lv2h_event_t *next;
@@ -176,7 +177,7 @@ LV2H_API int lv2h_node_set_count_limit(lv2h_node_t *node, int count_limit);
 LV2H_API int lv2h_node_follow(lv2h_node_t *node, lv2h_node_t *parent);
 LV2H_API int lv2h_node_unfollow(lv2h_node_t *node);
 
-int lv2h_schedule_event(lv2h_t *host, long timestamp_ns, lv2h_event_callback_fn callback, void *udata);
+int lv2h_schedule_event(lv2h_t *host, long timestamp_ns, int audio_run_delay, lv2h_event_callback_fn callback, void *udata);
 int lv2h_run_plugin_insts(lv2h_t *host, int frame_count);
 void *lv2h_run_audio(void *arg);
 

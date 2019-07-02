@@ -2,41 +2,9 @@
 
 #define LV2H_DEFAULT_INTERVAL_MS 1000
 
-// TODO use new utlist
-
-#define LL_INSERT_INORDER(head,add,cmp)                                                        \
-    LL_INSERT_INORDER2(head,add,cmp,next)
-
-#define LL_INSERT_INORDER2(head,add,cmp,next)                                                  \
-do {                                                                                           \
-  LDECLTYPE(head) _tmp;                                                                        \
-  if (head) {                                                                                  \
-    LL_LOWER_BOUND2(head, _tmp, add, cmp, next);                                               \
-    LL_APPEND_ELEM2(head, _tmp, add, next);                                                    \
-  } else {                                                                                     \
-    (head) = (add);                                                                            \
-    (head)->next = NULL;                                                                       \
-  }                                                                                            \
-} while (0)
-
-#define LL_LOWER_BOUND(head,elt,like,cmp)                                                      \
-    LL_LOWER_BOUND2(head,elt,like,cmp,next)
-
-#define LL_LOWER_BOUND2(head,elt,like,cmp,next)                                                \
-  do {                                                                                         \
-    if ((head) == NULL || (cmp(head, like)) >= 0) {                                            \
-      (elt) = NULL;                                                                            \
-    } else {                                                                                   \
-      for ((elt) = (head); (elt)->next != NULL; (elt) = (elt)->next) {                         \
-        if (cmp((elt)->next, like) >= 0) {                                                     \
-          break;                                                                               \
-        }                                                                                      \
-      }                                                                                        \
-    }                                                                                          \
-  } while (0)
-
 static int lv2h_event_cmp(lv2h_event_t *a, lv2h_event_t *b);
 static int lv2h_process_tick(lv2h_t *host);
+static int lv2h_is_node_at_count_limit(lv2h_node_t *node);
 static int lv2h_process_node(lv2h_event_t *ev);
 
 
@@ -77,7 +45,7 @@ int lv2h_node_new(lv2h_t *host, lv2h_node_callback_fn callback, void *udata, lv2
     node->divisor = 1;
     node->multiplier = 1;
     LL_APPEND2(host->parent_node_list, node, next_parent);
-    lv2h_schedule_event(host, 0, lv2h_process_node, node);
+    lv2h_schedule_event(host, 0, 0, lv2h_process_node, node);
     *out_node = node;
     return LV2H_OK;
 }
@@ -137,13 +105,15 @@ int lv2h_node_unfollow(lv2h_node_t *node) {
     return LV2H_OK;
 }
 
-int lv2h_schedule_event(lv2h_t *host, long timestamp_ns, lv2h_event_callback_fn callback, void *udata) {
+int lv2h_schedule_event(lv2h_t *host, long timestamp_ns, int audio_run_delay, lv2h_event_callback_fn callback, void *udata) {
     lv2h_event_t *ev;
     // TODO use preallocated event pool
     ev = calloc(1, sizeof(lv2h_event_t));
     ev->callback = callback;
     ev->udata = udata;
+    ev->min_audio_iter = __sync_fetch_and_add(&host->audio_iter, 0) + audio_run_delay;
     ev->timestamp_ns = timestamp_ns;
+    printf("lv2h_schedule_event ev->timestamp_ns=%ld\n", ev->timestamp_ns);
     LL_INSERT_INORDER(host->event_list, ev, lv2h_event_cmp);
     return LV2H_OK;
 }
@@ -161,14 +131,23 @@ static int lv2h_process_tick(lv2h_t *host) {
     lv2h_event_t *ev, *ev_tmp;
     LL_FOREACH_SAFE(host->event_list, ev, ev_tmp) {
         if (host->ts_now_ns >= ev->timestamp_ns) {
-            LL_DELETE(host->event_list, ev);
-            (ev->callback)(ev);
+            if (host->audio_iter >= ev->min_audio_iter) {
+                LL_DELETE(host->event_list, ev);
+                (ev->callback)(ev);
+            }
         } else {
             // We can break because event_list is sorted (LL_INSERT_INORDER)
             break;
         }
     }
     return LV2H_OK;
+}
+
+static int lv2h_is_node_at_count_limit(lv2h_node_t *node) {
+    if (node->parent) {
+        return lv2h_is_node_at_count_limit(node->parent);
+    }
+    return node->count_limit > 0 && node->count >= node->count_limit ? 1 : 0;
 }
 
 static int lv2h_process_node(lv2h_event_t *ev) {
@@ -185,7 +164,7 @@ static int lv2h_process_node(lv2h_event_t *ev) {
 
     // Increment count and bail if limit has been reached
     node->count += 1;
-    if (node->count_limit > 0 && node->count >= node->count_limit) {
+    if (lv2h_is_node_at_count_limit(node)) {
         goto lv2h_process_node_done;
     }
 
@@ -214,7 +193,7 @@ static int lv2h_process_node(lv2h_event_t *ev) {
     // Schedule next event for this node
     node->ts_last_ns = now_ns;
     node->ts_next_ns = next_ns;
-    lv2h_schedule_event(host, next_ns, lv2h_process_node, node);
+    lv2h_schedule_event(host, next_ns, 0, lv2h_process_node, node);
 
 lv2h_process_node_done:
     free(ev); // TODO `ev->in_queue = 0` (use preallocated event pool)
