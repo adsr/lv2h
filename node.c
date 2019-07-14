@@ -113,7 +113,7 @@ int lv2h_schedule_event(lv2h_t *host, long timestamp_ns, int audio_run_delay, lv
     ev->udata = udata;
     ev->min_audio_iter = __sync_fetch_and_add(&host->audio_iter, 0) + audio_run_delay;
     ev->timestamp_ns = timestamp_ns;
-    printf("lv2h_schedule_event ev->timestamp_ns=%ld\n", ev->timestamp_ns);
+    //printf("lv2h_schedule_event ev->timestamp_ns=%ld\n", ev->timestamp_ns);
     LL_INSERT_INORDER(host->event_list, ev, lv2h_event_cmp);
     return LV2H_OK;
 }

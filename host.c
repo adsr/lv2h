@@ -226,7 +226,7 @@ int lv2h_inst_send_midi(lv2h_inst_t *inst, char *port_name, uint8_t *bytes, int 
     pthread_mutex_lock(&host->mutex);
     end = lv2_evbuf_end(port->atom_input); // TODO _begin?
     lv2_evbuf_write(&end, 0, 0, lv2h_map_uri(inst->plug->host, LV2_MIDI__MidiEvent), bytes_len, bytes);
-    printf("lv2h_inst_send_midi %02x %02x %02x size=%u\n", bytes[0], bytes[1], bytes[2], lv2_evbuf_get_size(port->atom_input));
+    printf("lv2h_inst_send_midi %p %lu %02x %02x %02x size=%u\n", inst, host->audio_iter,  bytes[0], bytes[1], bytes[2], lv2_evbuf_get_size(port->atom_input));
     pthread_mutex_unlock(&host->mutex);
     return LV2H_OK;
 }
@@ -553,10 +553,10 @@ static int lv2h_run_plugin_inst(lv2h_inst_t *inst, int frame_count, uintmax_t au
     }
     if (inst->audio_iter != audio_iter && inst != host->audio_inst) {
 
+        pthread_mutex_lock(&host->mutex); // TODO mutex can be per instance
         lilv_instance_run(inst->lilv_inst, frame_count);
-
-        pthread_mutex_lock(&host->mutex);
         for (p = 0; p < inst->plug->port_count; ++p) {
+            // TODO optimize looping over all ports like this
             reader_port = inst->port_array + p;
             if (reader_port->atom_input) {
                 if (lv2_evbuf_get_size(reader_port->atom_input) > 0) {

@@ -114,6 +114,7 @@ struct _lv2h_port_t {
     float *reader_block_mixed;
     LV2_Atom_Sequence *atom_output;
     LV2_Evbuf *atom_input; // TODO replace type
+    LV2_Evbuf_Iterator atom_input_iter;
     lv2h_port_t *writer_port_list;
     lv2h_port_t *next;
     UT_hash_handle hh;
